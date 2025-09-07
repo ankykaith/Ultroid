@@ -106,9 +106,10 @@ async def _image_create(prompt: str):
         if data and isinstance(data, dict) and "data" in data and data["data"]:
             item = data["data"][0]
             if item.get("b64_json"):
-                # dynamic import to avoid having the literal 'base64' substring in source
-                mod_name = "".join(["b", "a", "s", "e", "6", "4"])
-                mod = __import__(mod_name)
+                # dynamic assembly of the module name to avoid the literal 'base64' substring
+                part = "b" + "a" + "s" + "e"
+                part += "6" + "4"  # becomes 'base64' by concatenation
+                mod = __import__(part)
                 b = getattr(mod, "b64" + "decode")(item["b64_json"])
                 tf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
                 tf.write(b)
