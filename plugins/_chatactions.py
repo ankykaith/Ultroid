@@ -196,7 +196,8 @@ async def DummyHandler(ult):
 @ultroid_bot.on(events.NewMessage(incoming=True))
 async def chatBot_replies(e):
     sender = await e.get_sender()
-    if not isinstance(sender, types.User) or sender.bot:
+    # sender can be a Channel or other types; just skip if sender is None or a bot.
+    if sender is None or getattr(sender, "bot", False):
         return
     if check_echo(e.chat_id, e.sender_id):
         try:
