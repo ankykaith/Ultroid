@@ -1,4 +1,30 @@
-# Ultroid - AI plugin
+"""AI — Chat, Images, and Transcription helpers
+
+Usage:
+    {i}ai <prompt>
+        Send a chat prompt to the configured OpenAI-compatible endpoint and reply with the result.
+
+    {i}ai create <prompt>
+        Generate an image from the prompt and send it to the chat.
+
+    Reply to media with {i}ai <instruction>:
+        • Reply to an image/photo/sticker: edits the image using the prompt.
+        • Reply to a voice/audio message: transcribes (via Whisper) and optionally answers questions about the audio.
+        • Reply to a text message: analyzes the text or suggests a short reply.
+
+Configuration (set with `setdb`):
+    • AI_API_KEY — API key for the OpenAI-compatible provider (preferred; can be changed at runtime).
+    • OPENAI_URL — Base URL for OpenAI-compatible endpoints (e.g. https://api.openai.com).
+    • OPENAI_MODEL — Optional model id.
+
+Examples:
+    {i}setdb AI_API_KEY sk-xxx
+    {i}ai write a short poem about coffee
+    {i}ai create a fantasy landscape with a castle
+
+This docstring is used by the help system; {i} will be replaced with the command prefix.
+"""
+
 import os
 import json
 import aiohttp
@@ -24,7 +50,7 @@ def get_api_base():
 
 
 def get_model():
-    return udB.get_key("OPENAI_MODEL") or "gpt-4o-mini"
+    return udB.get_key("OPENAI_MODEL") or "provider-3/gpt-4.1-nano"
 
 
 async def _chat_completion(prompt: str):
