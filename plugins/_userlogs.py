@@ -39,13 +39,18 @@ from telethon.tl import types
 import time
 
 # Track processed message IDs to prevent duplicates
-PROCESSED_MSGS = {}
+# Using a set for immediate duplicate detection
+PROCESSED_MSGS = set()
 CACHE_SPAM = {}
 TAG_EDITS = {}
-MSG_CLEANUP_INTERVAL = 300  # 5 minutes
 
 # Log module initialization
-LOGS.info("[TAG_LOGGER] Module initialized. Duplicate detection enabled with 5-second window.")
+LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
+
+# Check if ultroid_bot and asst are the same to avoid duplicate handlers
+IS_USER_MODE = ultroid_bot == asst
+if IS_USER_MODE:
+    LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -56,12 +61,8 @@ LOGS.info("[TAG_LOGGER] Module initialized. Duplicate detection enabled with 5-s
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
     
-    # Log entry into function - using INFO level to ensure it appears
-    LOGS.info(f"[TAG_LOGGER] Mention detected - Chat: {e.chat_id}, Msg: {e.id}, Private: {e.is_private}")
-    
     # Skip if not a group chat (DMs are handled separately)
     if e.is_private:
-        LOGS.info(f"[TAG_LOGGER] Skipping private message from sender {e.sender_id}")
         return
     
     # Comprehensive group type check including supergroups
@@ -72,37 +73,29 @@ async def all_messages_catcher(e):
          not getattr(e.chat, 'broadcast', False))
     )
     
-    # Log chat type for debugging
-    LOGS.info(f"[TAG_LOGGER] Chat type: {type(e.chat).__name__}, Megagroup: {getattr(e.chat, 'megagroup', 'N/A')}, Broadcast: {getattr(e.chat, 'broadcast', 'N/A')}")
-    
     if not is_valid_group:
-        LOGS.info(f"[TAG_LOGGER] Skipping non-group chat: {getattr(e.chat, 'title', 'Unknown')} (type: {type(e.chat).__name__})")
         return
     
-    # Enhanced deduplication check with timestamp
-    current_time = time.time()
+    # Immediate deduplication using message ID
     cache_key = f"{e.chat_id}_{e.id}"
     
     # Check if message was already processed
     if cache_key in PROCESSED_MSGS:
-        time_diff = current_time - PROCESSED_MSGS[cache_key]
-        if time_diff < 5:  # If processed within last 5 seconds, skip
-            LOGS.warning(f"[TAG_LOGGER] DUPLICATE DETECTED! Skipping {cache_key} (processed {time_diff:.2f}s ago)")
-            return
-        else:
-            LOGS.info(f"[TAG_LOGGER] Re-processing old message {cache_key} (last processed {time_diff:.2f}s ago)")
+        # Log the duplicate with details about timing
+        import traceback
+        stack = ''.join(traceback.format_stack()[-3:-1])
+        LOGS.warning(f"[TAG_LOGGER] DUPLICATE! msg {e.id} from {e.chat_id} already processed. Stack: {stack[:100]}...")
+        return
     
-    # Add to processed messages with timestamp
-    PROCESSED_MSGS[cache_key] = current_time
-    LOGS.info(f"[TAG_LOGGER] Processing message {cache_key} (cache size: {len(PROCESSED_MSGS)})")
+    # Add to processed messages immediately
+    PROCESSED_MSGS.add(cache_key)
+    LOGS.info(f"[TAG_LOGGER] Added {cache_key} to cache (size: {len(PROCESSED_MSGS)})")
     
-    # Clean up old entries periodically
-    if len(PROCESSED_MSGS) > 100:
-        # Remove entries older than 5 minutes
-        cutoff_time = current_time - MSG_CLEANUP_INTERVAL
-        old_count = len(PROCESSED_MSGS)
-        PROCESSED_MSGS = {k: v for k, v in PROCESSED_MSGS.items() if v > cutoff_time}
-        LOGS.info(f"[TAG_LOGGER] Cache cleanup: {old_count} -> {len(PROCESSED_MSGS)} entries")
+    # Clean up old entries if cache gets too large
+    if len(PROCESSED_MSGS) > 1000:
+        # Keep only last 500 entries
+        PROCESSED_MSGS = set(list(PROCESSED_MSGS)[-500:])
+        LOGS.info(f"[TAG_LOGGER] Cache cleaned, keeping last 500 entries")
     
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
@@ -115,14 +108,15 @@ async def all_messages_catcher(e):
     
     # Log when processing a tag
     sender_info = f"@{x.username}" if x and hasattr(x, 'username') and x.username else f"ID:{x.id if x else 'Unknown'}"
-    chat_info = f"{getattr(e.chat, 'title', 'Unknown')} ({e.chat_id})"
-    LOGS.info(f"[TAG_LOGGER] Processing tag from {chat_info}, message {e.id}, sender {sender_info}")
+    chat_info = f"{getattr(e.chat, 'title', 'Unknown')}"
+    LOGS.info(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}")
     
     buttons = await parse_buttons(e)
     try:
-        LOGS.info(f"[TAG_LOGGER] Attempting to forward to TAG_LOG channel {NEEDTOLOG}")
+        # Use the assistant client to send message
+        # If USER_MODE is enabled, asst and ultroid_bot are the same, which is fine
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
-        LOGS.info(f"[TAG_LOGGER] SUCCESS: Forwarded message {e.id} from chat {e.chat_id} -> TAG_LOG message {sent.id}")
+        LOGS.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
         
         if TAG_EDITS.get(e.chat_id):
             TAG_EDITS[e.chat_id].update({e.id: {"id": sent.id, "msg": e}})
@@ -184,7 +178,6 @@ if udB.get_key("TAG_LOG"):
 
     @ultroid_bot.on(events.MessageEdited(func=lambda x: not x.out))
     async def upd_edits(event):
-        global PROCESSED_MSGS
         x = event.sender
         if isinstance(x, User) and (x.bot or x.verified):
             return
@@ -192,17 +185,6 @@ if udB.get_key("TAG_LOG"):
         # Skip if private message
         if event.is_private:
             return
-            
-        # Use edit-specific cache key to track edits separately
-        cache_key = f"edit_{event.chat_id}_{event.id}_{event.edit_date.timestamp() if event.edit_date else 0}"
-        current_time = time.time()
-        
-        if cache_key in PROCESSED_MSGS:
-            time_diff = current_time - PROCESSED_MSGS[cache_key]
-            if time_diff < 2:  # Skip if processed within last 2 seconds
-                return
-        
-        PROCESSED_MSGS[cache_key] = current_time
         if event.chat_id not in TAG_EDITS:
             if event.sender_id == udB.get_key("TAG_LOG"):
                 return
