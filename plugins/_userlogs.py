@@ -49,8 +49,16 @@ TAG_EDITS = {}
 )
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
-    # Skip processing if not a group chat
-    if not isinstance(e.chat, (types.Chat, types.Channel)) or getattr(e.chat, 'broadcast', False):
+    # Comprehensive group type check including supergroups
+    is_valid_group = (
+        isinstance(e.chat, types.Chat) or
+        (isinstance(e.chat, types.Channel) and
+         getattr(e.chat, 'megagroup', False) and
+         not getattr(e.chat, 'broadcast', False))
+    )
+    if not is_valid_group:
+        LOGS.debug(f"Skipping non-group chat: {getattr(e.chat, 'title', 'DM')}")
+        return
         return
     
     # Deduplication check
@@ -134,9 +142,14 @@ if udB.get_key("TAG_LOG"):
 
     @ultroid_bot.on(events.MessageEdited(func=lambda x: not x.out))
     async def upd_edits(event):
+        global PROCESSED_MSGS
         x = event.sender
         if isinstance(x, User) and (x.bot or x.verified):
             return
+        cache_key = f"{event.chat_id}_{event.id}"
+        if cache_key in PROCESSED_MSGS:
+            return
+        PROCESSED_MSGS.add(cache_key)
         if event.chat_id not in TAG_EDITS:
             if event.sender_id == udB.get_key("TAG_LOG"):
                 return
