@@ -37,6 +37,10 @@ from . import (
 
 from telethon.tl import types
 import time
+import logging
+
+# Get the correct logger
+LOGGER = logging.getLogger("pyUltLogs")
 
 # Track processed message IDs to prevent duplicates
 # Using a set for immediate duplicate detection
@@ -45,12 +49,14 @@ CACHE_SPAM = {}
 TAG_EDITS = {}
 
 # Log module initialization
-LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
+LOGGER.info("[TAG_LOGGER] User logs module loaded successfully")
 
 # Check if ultroid_bot and asst are the same to avoid duplicate handlers
 IS_USER_MODE = ultroid_bot == asst
 if IS_USER_MODE:
-    LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
+    LOGGER.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
+else:
+    LOGGER.info("[TAG_LOGGER] Using separate clients for user and assistant")
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -61,8 +67,12 @@ if IS_USER_MODE:
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
     
+    # Log at the very beginning
+    LOGGER.info(f"[TAG_LOGGER] Handler triggered for msg {e.id} in chat {e.chat_id}, private: {e.is_private}")
+    
     # Skip if not a group chat (DMs are handled separately)
     if e.is_private:
+        LOGGER.info(f"[TAG_LOGGER] Skipping private message {e.id}")
         return
     
     # Comprehensive group type check including supergroups
@@ -84,18 +94,18 @@ async def all_messages_catcher(e):
         # Log the duplicate with details about timing
         import traceback
         stack = ''.join(traceback.format_stack()[-3:-1])
-        LOGS.warning(f"[TAG_LOGGER] DUPLICATE! msg {e.id} from {e.chat_id} already processed. Stack: {stack[:100]}...")
+        LOGGER.warning(f"[TAG_LOGGER] DUPLICATE! msg {e.id} from {e.chat_id} already processed. Stack: {stack[:100]}...")
         return
     
     # Add to processed messages immediately
     PROCESSED_MSGS.add(cache_key)
-    LOGS.info(f"[TAG_LOGGER] Added {cache_key} to cache (size: {len(PROCESSED_MSGS)})")
+    LOGGER.info(f"[TAG_LOGGER] Added {cache_key} to cache (size: {len(PROCESSED_MSGS)})")
     
     # Clean up old entries if cache gets too large
     if len(PROCESSED_MSGS) > 1000:
         # Keep only last 500 entries
         PROCESSED_MSGS = set(list(PROCESSED_MSGS)[-500:])
-        LOGS.info(f"[TAG_LOGGER] Cache cleaned, keeping last 500 entries")
+        LOGGER.info(f"[TAG_LOGGER] Cache cleaned, keeping last 500 entries")
     
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
@@ -109,14 +119,14 @@ async def all_messages_catcher(e):
     # Log when processing a tag
     sender_info = f"@{x.username}" if x and hasattr(x, 'username') and x.username else f"ID:{x.id if x else 'Unknown'}"
     chat_info = f"{getattr(e.chat, 'title', 'Unknown')}"
-    LOGS.info(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}")
+    LOGGER.info(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}")
     
     buttons = await parse_buttons(e)
     try:
         # Use the assistant client to send message
         # If USER_MODE is enabled, asst and ultroid_bot are the same, which is fine
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
-        LOGS.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
+        LOGGER.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
         
         if TAG_EDITS.get(e.chat_id):
             TAG_EDITS[e.chat_id].update({e.id: {"id": sent.id, "msg": e}})
