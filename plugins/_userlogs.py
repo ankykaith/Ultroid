@@ -35,10 +35,12 @@ from . import (
     ultroid_bot,
 )
 
+from telethon.tl import types
+
+# Track processed message IDs to prevent duplicates
+PROCESSED_MSGS = set()
 CACHE_SPAM = {}
 TAG_EDITS = {}
-
-
 @ultroid_bot.on(
     events.NewMessage(
         incoming=True,
@@ -46,6 +48,21 @@ TAG_EDITS = {}
     ),
 )
 async def all_messages_catcher(e):
+    global PROCESSED_MSGS
+    # Skip processing if not a group chat
+    if not isinstance(e.chat, (types.Chat, types.Channel)) or getattr(e.chat, 'broadcast', False):
+        return
+    
+    # Deduplication check
+    cache_key = f"{e.chat_id}_{e.id}"
+    if cache_key in PROCESSED_MSGS:
+        return
+    PROCESSED_MSGS.add(cache_key)
+    
+    # Maintain cache size
+    if len(PROCESSED_MSGS) > 100:
+        PROCESSED_MSGS = set()
+    
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
         return
