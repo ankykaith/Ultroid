@@ -44,6 +44,9 @@ CACHE_SPAM = {}
 TAG_EDITS = {}
 MSG_CLEANUP_INTERVAL = 300  # 5 minutes
 
+# Log module initialization
+LOGS.info("[TAG_LOGGER] Module initialized. Duplicate detection enabled with 5-second window.")
+
 @ultroid_bot.on(
     events.NewMessage(
         incoming=True,
@@ -53,8 +56,8 @@ MSG_CLEANUP_INTERVAL = 300  # 5 minutes
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
     
-    # Debug: Log entry into function
-    LOGS.debug(f"[TAG_LOGGER] Entering all_messages_catcher - Chat: {e.chat_id}, Msg: {e.id}, Private: {e.is_private}")
+    # Log entry into function - using INFO level to ensure it appears
+    LOGS.info(f"[TAG_LOGGER] Mention detected - Chat: {e.chat_id}, Msg: {e.id}, Private: {e.is_private}")
     
     # Skip if not a group chat (DMs are handled separately)
     if e.is_private:
@@ -69,8 +72,8 @@ async def all_messages_catcher(e):
          not getattr(e.chat, 'broadcast', False))
     )
     
-    # Debug: Log chat type
-    LOGS.debug(f"[TAG_LOGGER] Chat type: {type(e.chat).__name__}, Megagroup: {getattr(e.chat, 'megagroup', 'N/A')}, Broadcast: {getattr(e.chat, 'broadcast', 'N/A')}")
+    # Log chat type for debugging
+    LOGS.info(f"[TAG_LOGGER] Chat type: {type(e.chat).__name__}, Megagroup: {getattr(e.chat, 'megagroup', 'N/A')}, Broadcast: {getattr(e.chat, 'broadcast', 'N/A')}")
     
     if not is_valid_group:
         LOGS.info(f"[TAG_LOGGER] Skipping non-group chat: {getattr(e.chat, 'title', 'Unknown')} (type: {type(e.chat).__name__})")
@@ -87,11 +90,11 @@ async def all_messages_catcher(e):
             LOGS.warning(f"[TAG_LOGGER] DUPLICATE DETECTED! Skipping {cache_key} (processed {time_diff:.2f}s ago)")
             return
         else:
-            LOGS.debug(f"[TAG_LOGGER] Re-processing old message {cache_key} (last processed {time_diff:.2f}s ago)")
+            LOGS.info(f"[TAG_LOGGER] Re-processing old message {cache_key} (last processed {time_diff:.2f}s ago)")
     
     # Add to processed messages with timestamp
     PROCESSED_MSGS[cache_key] = current_time
-    LOGS.debug(f"[TAG_LOGGER] Added {cache_key} to processed messages (total: {len(PROCESSED_MSGS)})")
+    LOGS.info(f"[TAG_LOGGER] Processing message {cache_key} (cache size: {len(PROCESSED_MSGS)})")
     
     # Clean up old entries periodically
     if len(PROCESSED_MSGS) > 100:
@@ -117,7 +120,7 @@ async def all_messages_catcher(e):
     
     buttons = await parse_buttons(e)
     try:
-        LOGS.debug(f"[TAG_LOGGER] Attempting to send message to TAG_LOG channel {NEEDTOLOG}")
+        LOGS.info(f"[TAG_LOGGER] Attempting to forward to TAG_LOG channel {NEEDTOLOG}")
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
         LOGS.info(f"[TAG_LOGGER] SUCCESS: Forwarded message {e.id} from chat {e.chat_id} -> TAG_LOG message {sent.id}")
         
