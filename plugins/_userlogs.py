@@ -37,27 +37,17 @@ from . import (
 
 from telethon.tl import types
 import time
+import sys
 
 # Track processed message IDs to prevent duplicates
-# Using a set for immediate duplicate detection
-PROCESSED_MSGS = set()
+# Using a dict to store message info for debugging
+PROCESSED_MSGS = {}
 CACHE_SPAM = {}
 TAG_EDITS = {}
 
-# Log module initialization with proper error handling
-print("[TAG_LOGGER] User logs module loaded successfully", flush=True)
-try:
-    LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
-    # Check if ultroid_bot and asst are the same to avoid duplicate handlers
-    IS_USER_MODE = ultroid_bot == asst
-    if IS_USER_MODE:
-        print("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant", flush=True)
-        LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
-    else:
-        print("[TAG_LOGGER] Using separate clients for user and assistant", flush=True)
-        LOGS.info("[TAG_LOGGER] Using separate clients for user and assistant")
-except Exception as e:
-    print(f"[TAG_LOGGER] Module init error: {e}", flush=True)
+# Force output to stderr for Docker logs
+sys.stderr.write("[TAG_LOGGER] ==> Module _userlogs.py loaded\n")
+sys.stderr.flush()
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -68,25 +58,27 @@ except Exception as e:
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
     
-    # Immediate deduplication using message ID - FIRST THING WE DO
-    cache_key = f"{e.chat_id}_{e.id}"
+    # Create unique key for this message
+    msg_key = f"{e.chat_id}_{e.id}"
     
-    # Check if message was already processed
-    if cache_key in PROCESSED_MSGS:
-        client_type = "USER" if not e.client._bot else "BOT"
-        print(f"[TAG_LOGGER] DUPLICATE BLOCKED! [{client_type}] msg {e.id} from chat {e.chat_id} - already processed", flush=True)
-        LOGS.warning(f"[TAG_LOGGER] DUPLICATE BLOCKED! [{client_type}] msg {e.id} from chat {e.chat_id} - already processed")
+    # Check if already processed (PREVENT DUPLICATES)
+    if msg_key in PROCESSED_MSGS:
+        # Already processed, log and exit
+        sys.stderr.write(f"[TAG_LOGGER] DUPLICATE! Already processed {msg_key}\n")
+        sys.stderr.flush()
         return
     
-    # Add to processed messages immediately BEFORE any other checks
-    PROCESSED_MSGS.add(cache_key)
-    client_type = "USER" if not e.client._bot else "BOT"
-    print(f"[TAG_LOGGER] New mention [{client_type}] - msg {e.id} from chat {e.chat_id} (cache: {len(PROCESSED_MSGS)})", flush=True)
-    LOGS.info(f"[TAG_LOGGER] New mention [{client_type}] - msg {e.id} from chat {e.chat_id} (cache: {len(PROCESSED_MSGS)})")
+    # Mark as processed IMMEDIATELY
+    PROCESSED_MSGS[msg_key] = time.time()
+    
+    # Log the new mention
+    sys.stderr.write(f"[TAG_LOGGER] NEW MENTION: msg={e.id} chat={e.chat_id} private={e.is_private}\n")
+    sys.stderr.flush()
     
     # Skip if not a group chat (DMs are handled separately)
     if e.is_private:
-        LOGS.info(f"[TAG_LOGGER] Skipping private message {e.id}")
+        sys.stderr.write(f"[TAG_LOGGER] Skipping private message\n")
+        sys.stderr.flush()
         return
     
     # Comprehensive group type check including supergroups
@@ -98,14 +90,17 @@ async def all_messages_catcher(e):
     )
     
     if not is_valid_group:
-        LOGS.info(f"[TAG_LOGGER] Skipping non-group chat type: {type(e.chat).__name__}")
+        sys.stderr.write(f"[TAG_LOGGER] Skipping non-group chat\n")
+        sys.stderr.flush()
         return
     
-    # Clean up cache if it gets too large (but never remove recent entries)
+    # Clean up old entries if cache gets too large
     if len(PROCESSED_MSGS) > 10000:
-        # Keep only last 5000 entries
-        PROCESSED_MSGS = set(list(PROCESSED_MSGS)[-5000:])
-        LOGS.info(f"[TAG_LOGGER] Cache cleaned, keeping last 5000 entries")
+        # Keep only recent entries (last hour)
+        cutoff = time.time() - 3600
+        PROCESSED_MSGS = {k: v for k, v in PROCESSED_MSGS.items() if v > cutoff}
+        sys.stderr.write(f"[TAG_LOGGER] Cache cleaned, {len(PROCESSED_MSGS)} entries remain\n")
+        sys.stderr.flush()
     
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
@@ -116,25 +111,16 @@ async def all_messages_catcher(e):
     if e.chat_id == NEEDTOLOG:
         return
     
-    # Log when processing a tag
-    sender_info = f"@{x.username}" if x and hasattr(x, 'username') and x.username else f"ID:{x.id if x else 'Unknown'}"
-    chat_info = f"{getattr(e.chat, 'title', 'Unknown')}"
-    print(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}", flush=True)
-    LOGS.info(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}")
+    # Log processing
+    sys.stderr.write(f"[TAG_LOGGER] Processing tag from chat {e.chat_id} msg {e.id}\n")
+    sys.stderr.flush()
     
     buttons = await parse_buttons(e)
     try:
-        # Try to resolve the entity first if needed
-        try:
-            await asst.get_entity(NEEDTOLOG)
-        except Exception:
-            # If asst can't access, try with ultroid_bot
-            pass
-        
-        # Use the assistant client to send message
+        # Send to TAG_LOG channel
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
-        print(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}", flush=True)
-        LOGS.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
+        sys.stderr.write(f"[TAG_LOGGER] SUCCESS! Forwarded msg {e.id} -> TAG_LOG msg {sent.id}\n")
+        sys.stderr.flush()
         
         if TAG_EDITS.get(e.chat_id):
             TAG_EDITS[e.chat_id].update({e.id: {"id": sent.id, "msg": e}})
