@@ -45,16 +45,19 @@ CACHE_SPAM = {}
 TAG_EDITS = {}
 
 # Log module initialization with proper error handling
+print("[TAG_LOGGER] User logs module loaded successfully", flush=True)
 try:
     LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
     # Check if ultroid_bot and asst are the same to avoid duplicate handlers
     IS_USER_MODE = ultroid_bot == asst
     if IS_USER_MODE:
+        print("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant", flush=True)
         LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
     else:
+        print("[TAG_LOGGER] Using separate clients for user and assistant", flush=True)
         LOGS.info("[TAG_LOGGER] Using separate clients for user and assistant")
 except Exception as e:
-    print(f"[TAG_LOGGER] Module init error: {e}")
+    print(f"[TAG_LOGGER] Module init error: {e}", flush=True)
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -71,12 +74,14 @@ async def all_messages_catcher(e):
     # Check if message was already processed
     if cache_key in PROCESSED_MSGS:
         client_type = "USER" if not e.client._bot else "BOT"
+        print(f"[TAG_LOGGER] DUPLICATE BLOCKED! [{client_type}] msg {e.id} from chat {e.chat_id} - already processed", flush=True)
         LOGS.warning(f"[TAG_LOGGER] DUPLICATE BLOCKED! [{client_type}] msg {e.id} from chat {e.chat_id} - already processed")
         return
     
     # Add to processed messages immediately BEFORE any other checks
     PROCESSED_MSGS.add(cache_key)
     client_type = "USER" if not e.client._bot else "BOT"
+    print(f"[TAG_LOGGER] New mention [{client_type}] - msg {e.id} from chat {e.chat_id} (cache: {len(PROCESSED_MSGS)})", flush=True)
     LOGS.info(f"[TAG_LOGGER] New mention [{client_type}] - msg {e.id} from chat {e.chat_id} (cache: {len(PROCESSED_MSGS)})")
     
     # Skip if not a group chat (DMs are handled separately)
@@ -114,6 +119,7 @@ async def all_messages_catcher(e):
     # Log when processing a tag
     sender_info = f"@{x.username}" if x and hasattr(x, 'username') and x.username else f"ID:{x.id if x else 'Unknown'}"
     chat_info = f"{getattr(e.chat, 'title', 'Unknown')}"
+    print(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}", flush=True)
     LOGS.info(f"[TAG_LOGGER] Processing mention from {chat_info} (ID: {e.chat_id}), msg: {e.id}, sender: {sender_info}")
     
     buttons = await parse_buttons(e)
@@ -127,6 +133,7 @@ async def all_messages_catcher(e):
         
         # Use the assistant client to send message
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
+        print(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}", flush=True)
         LOGS.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
         
         if TAG_EDITS.get(e.chat_id):
