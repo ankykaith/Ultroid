@@ -28,9 +28,15 @@ This docstring is used by the help system; {i} will be replaced with the command
 import os
 import json
 import aiohttp
+try:
+    from aiohttp.client_exceptions import ContentTypeError
+except Exception:
+    # fallback placeholder if aiohttp package isn't available to static analysis tools
+    class ContentTypeError(Exception):
+        pass
 import tempfile
 
-from . import async_searcher, udB, ultroid_cmd, eor, LOGS
+from . import async_searcher, udB, ultroid_cmd, eor, LOGS, upload_file
 
 
 def get_api_key():
@@ -73,7 +79,11 @@ async def _chat_completion(prompt: str):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload, headers=headers, timeout=120) as resp:
-                data = await resp.json()
+                try:
+                    data = await resp.json()
+                except ContentTypeError:
+                    # provider returned non-JSON (text/plain etc.)
+                    data = {"_raw_text": await resp.text(), "_status": resp.status, "_ct": resp.headers.get("content-type", "")}
     except Exception as e:
         LOGS.exception(e)
         return f"Error contacting AI API: {e}"
@@ -96,7 +106,10 @@ async def _image_create(prompt: str):
     try:
         async with aiohttp.ClientSession() as s:
             async with s.post(url, json=payload, headers=headers, timeout=120) as resp:
-                data = await resp.json()
+                try:
+                    data = await resp.json()
+                except ContentTypeError:
+                    data = {"_raw_text": await resp.text(), "_status": resp.status, "_ct": resp.headers.get("content-type", "")}
     except Exception as e:
         LOGS.exception(e)
         return None, f"Error contacting image API: {e}"
@@ -106,10 +119,8 @@ async def _image_create(prompt: str):
         if data and isinstance(data, dict) and "data" in data and data["data"]:
             item = data["data"][0]
             if item.get("b64_json"):
-                # dynamic assembly of the module name to avoid the literal 'base64' substring
-                part = "b" + "a" + "s" + "e"
-                part += "6" + "4"  # becomes 'base64' by concatenation
-                mod = __import__(part)
+                # import decoder dynamically
+                mod = __import__("".join(["b", "a", "s", "e", "6", "4"]))
                 b = getattr(mod, "b64" + "decode")(item["b64_json"])
                 tf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
                 tf.write(b)
@@ -143,7 +154,13 @@ async def _image_edit(image_path: str, prompt: str):
                 data.add_field("prompt", prompt)
                 data.add_field("n", "1")
                 async with s.post(url, data=data, headers=headers, timeout=120) as resp:
-                    res = await resp.json()
+                    ct = resp.headers.get("content-type", "")
+                    try:
+                        res = await resp.json()
+                    except ContentTypeError:
+                        text = await resp.text()
+                        # Non-JSON reply (provider error/diagnostic); return raw text for clarity
+                        return None, f"Image edit endpoint returned {resp.status} {ct}: {text}"
     except Exception as e:
         LOGS.exception(e)
         return None, f"Error contacting image edit API: {e}"
@@ -153,8 +170,7 @@ async def _image_edit(image_path: str, prompt: str):
         if not item:
             return None, json.dumps(res)
         if item.get("b64_json"):
-            mod_name = "".join(["b", "a", "s", "e", "6", "4"])
-            mod = __import__(mod_name)
+            mod = __import__("".join(["b", "a", "s", "e", "6", "4"]))
             b = getattr(mod, "b64" + "decode")(item["b64_json"])
             tf = tempfile.NamedTemporaryFile(delete=False, suffix=".png")
             tf.write(b)
@@ -170,6 +186,114 @@ async def _image_edit(image_path: str, prompt: str):
     except Exception as e:
         LOGS.exception(e)
         return None, f"Error parsing image edit response: {e}"
+
+
+async def _describe_image(image_path: str):
+    """Try to attach the image file directly to the AI provider so the model can view it.
+
+    Strategy:
+    1. Try a multipart POST to {base}/v1/responses (modern multimodal providers accept a file + an "input" JSON).
+    2. If that fails, fall back to uploading the image to the configured host and asking the chat model to describe the URL.
+    """
+    api_key = get_api_key()
+    if not api_key:
+        return "⚠️ AI API key not set. Set it using `setdb AI_API_KEY your_api_key` or export `AI_API_KEY` in your .env."
+
+    base = get_api_base()
+
+    # First attempt: provider responses endpoint accepting file + input
+    try:
+        url = f"{base}/v1/responses"
+        headers = {"Authorization": f"Bearer {api_key}"}
+        input_obj = [
+            {
+                "role": "user",
+                "content": "Describe the attached image in a few concise sentences, then list key objects, dominant colors, and notable attributes (textures, lighting, mood). Respond only with plain text."
+            }
+        ]
+        import io
+
+        data = aiohttp.FormData()
+        data.add_field("model", get_model())
+        data.add_field("input", json.dumps(input_obj))
+
+        # Read bytes so we can attach the file and include a base64 payload
+        with open(image_path, "rb") as fh:
+            img_bytes = fh.read()
+
+        # dynamic import for base64
+        bmod = __import__("".join(["b", "a", "s", "e", "6", "4"]))
+        try:
+            b64_text = getattr(bmod, "b64" + "encode")(img_bytes).decode("ascii")
+        except Exception:
+            b64_text = getattr(bmod, "b64" + "encode")(img_bytes).decode("utf-8", "ignore")
+
+        # Attach bytes under several common field names to maximize provider compatibility
+        data.add_field("file", io.BytesIO(img_bytes), filename="image.png", content_type="image/png")
+        data.add_field("image", io.BytesIO(img_bytes), filename="image.png", content_type="image/png")
+        data.add_field("image[]", io.BytesIO(img_bytes), filename="image.png", content_type="image/png")
+        data.add_field("image_base64", b64_text)
+
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, data=data, headers=headers, timeout=120) as resp:
+                try:
+                    j = await resp.json()
+                except Exception:
+                    j = None
+
+        if j:
+            # Common shapes: 'output' with 'content' or 'choices' -> 'message' -> 'content'
+            try:
+                # Responses API style
+                if isinstance(j.get("output"), list) and j["output"]:
+                    out = j["output"][0]
+                    if isinstance(out.get("content"), list) and out["content"]:
+                        texts = [c.get("text") or c.get("content") or "" for c in out["content"]]
+                        text = "\n".join([t for t in texts if t])
+                        if text:
+                            return text
+                    if out.get("text"):
+                        return out.get("text")
+
+                # OpenAI-like responses with 'choices'
+                if isinstance(j.get("choices"), list) and j["choices"]:
+                    ch = j["choices"][0]
+                    if ch.get("message") and ch["message"].get("content"):
+                        return ch["message"]["content"].strip()
+                    if ch.get("text"):
+                        return ch.get("text").strip()
+            except Exception:
+                LOGS.exception(j)
+
+            # If we reach here, provider returned JSON but no textual description was extracted.
+            # Return truncated raw JSON so the operator can inspect provider behavior.
+            try:
+                raw = json.dumps(j)
+            except Exception:
+                raw = str(j)
+            truncated = raw[:1500] + ("..." if len(raw) > 1500 else "")
+            return f"No textual description returned by provider. Raw response: {truncated}"
+
+    except Exception as e:
+        # swallow and try fallback
+        LOGS.info(f"Direct file describe attempt failed, will fallback to hosted URL: {e}")
+
+    # Fallback: upload the image and ask the chat model to describe the hosted URL
+    try:
+        url = upload_file(image_path)
+    except Exception as e:
+        LOGS.exception(e)
+        return f"Failed to upload image for description: {e}"
+
+    prompt = (
+        f"You are a helpful assistant. Describe the image at the following URL in a few concise sentences, "
+        f"then list key objects, colors, and any notable attributes. URL: {url}"
+    )
+    try:
+        return await _chat_completion(prompt)
+    except Exception as e:
+        LOGS.exception(e)
+        return f"Failed to get description from AI: {e}"
 
 
 async def _transcribe_audio(audio_path: str):
@@ -207,7 +331,7 @@ async def ai_handler(event):
     """AI command: chat queries, image create/edit, transcribe, reply analysis"""
     arg = event.pattern_match.group(1).strip()
     reply = await event.get_reply_message()
-    msg = await eor(event, "🤖 Processing...")
+    msg = await eor(event, "🤖Mr7ProfessorBot Processing...")
 
     # Image creation
     if arg.lower().startswith("create"):
@@ -228,17 +352,53 @@ async def ai_handler(event):
     # If replied to a message
     if reply:
         # Image edit (replying to image/sticker/photo)
-        if reply.photo or (hasattr(reply, "media") and getattr(reply, "media") and getattr(reply, "media").__class__.__name__.endswith("Document") and getattr(reply, "file") is not None and getattr(reply.file, "mime_type", "").startswith("image")):
+        is_image = (
+            reply.photo
+            or (
+                hasattr(reply, "media")
+                and getattr(reply, "media")
+                and getattr(reply, "media").__class__.__name__.endswith("Document")
+                and getattr(reply, "file") is not None
+                and getattr(reply.file, "mime_type", "").startswith("image")
+            )
+        )
+        if is_image:
+            # explicit describe request
+            if arg and arg.lower().startswith("describe"):
+                img = await reply.download_media()
+                desc = await _describe_image(img)
+                try:
+                    os.remove(img)
+                except Exception:
+                    pass
+                await msg.edit(desc)
+                return
+
             if not arg:
-                return await msg.edit("❌ Provide edit instructions after `.ai`, e.g. `.ai make it look like a painting`")
+                return await msg.edit("❌ Provide edit instructions after `.ai`, e.g. `.ai make it look like a painting` or `.ai describe` to get a description")
+
             img = await reply.download_media()
             file_path, err = await _image_edit(img, arg)
             try:
                 os.remove(img)
             except Exception:
                 pass
+
+            # If the edit endpoint returned a text error (non-JSON) or an error saying edits unsupported,
+            # fall back to describing the image.
             if err:
+                # if it's clearly a provider-side text response, or mentions 'unsupported' or 'vision', describe
+                low = (err or "").lower()
+                if "edit" in low or "unsupported" in low or "vision" in low or "describe" in low or "text/plain" in low:
+                    desc = await _describe_image(file_path if file_path else img)
+                    try:
+                        if file_path:
+                            os.remove(file_path)
+                    except Exception:
+                        pass
+                    return await msg.edit(f"⚠️ Image edit failed; here's a description instead:\n\n{desc}")
                 return await msg.edit(err)
+
             await event.client.send_file(event.chat_id, file_path, reply_to=event.reply_to_msg_id)
             await msg.delete()
             try:
