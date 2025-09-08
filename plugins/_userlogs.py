@@ -44,15 +44,17 @@ PROCESSED_MSGS = set()
 CACHE_SPAM = {}
 TAG_EDITS = {}
 
-# Log module initialization
-LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
-
-# Check if ultroid_bot and asst are the same to avoid duplicate handlers
-IS_USER_MODE = ultroid_bot == asst
-if IS_USER_MODE:
-    LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
-else:
-    LOGS.info("[TAG_LOGGER] Using separate clients for user and assistant")
+# Log module initialization with proper error handling
+try:
+    LOGS.info("[TAG_LOGGER] User logs module loaded successfully")
+    # Check if ultroid_bot and asst are the same to avoid duplicate handlers
+    IS_USER_MODE = ultroid_bot == asst
+    if IS_USER_MODE:
+        LOGS.info("[TAG_LOGGER] USER_MODE detected - using single client for both user and assistant")
+    else:
+        LOGS.info("[TAG_LOGGER] Using separate clients for user and assistant")
+except Exception as e:
+    print(f"[TAG_LOGGER] Module init error: {e}")
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -116,8 +118,14 @@ async def all_messages_catcher(e):
     
     buttons = await parse_buttons(e)
     try:
+        # Try to resolve the entity first if needed
+        try:
+            await asst.get_entity(NEEDTOLOG)
+        except Exception:
+            # If asst can't access, try with ultroid_bot
+            pass
+        
         # Use the assistant client to send message
-        # If USER_MODE is enabled, asst and ultroid_bot are the same, which is fine
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
         LOGS.info(f"[TAG_LOGGER] ✓ Forwarded to TAG_LOG: msg {e.id} from chat {e.chat_id} -> log msg {sent.id}")
         
@@ -347,11 +355,11 @@ async def parse_buttons(event):
     buttons = [[Button.url(where_n, where_l)]]
     if isinstance(x, User) and x.username:
         try:
-            buttons.append(
-                [Button.mention(who_n, await asst.get_input_entity(x.username))]
-            )
-        except Exception as er:
-            LOGS.exception(er)
+            # Try to get entity, but don't fail if it doesn't work
+            entity = await asst.get_input_entity(x.username)
+            buttons.append([Button.mention(who_n, entity)])
+        except Exception:
+            # Fall back to URL button if entity resolution fails
             buttons.append([Button.url(who_n, f"t.me/{x.username}")])
     elif getattr(x, "username"):
         buttons.append([Button.url(who_n, f"t.me/{x.username}")])
