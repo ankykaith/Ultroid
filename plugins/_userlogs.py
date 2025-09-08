@@ -36,11 +36,14 @@ from . import (
 )
 
 from telethon.tl import types
+import time
 
 # Track processed message IDs to prevent duplicates
-PROCESSED_MSGS = set()
+PROCESSED_MSGS = {}
 CACHE_SPAM = {}
 TAG_EDITS = {}
+MSG_CLEANUP_INTERVAL = 300  # 5 minutes
+
 @ultroid_bot.on(
     events.NewMessage(
         incoming=True,
@@ -49,6 +52,15 @@ TAG_EDITS = {}
 )
 async def all_messages_catcher(e):
     global PROCESSED_MSGS
+    
+    # Debug: Log entry into function
+    LOGS.debug(f"[TAG_LOGGER] Entering all_messages_catcher - Chat: {e.chat_id}, Msg: {e.id}, Private: {e.is_private}")
+    
+    # Skip if not a group chat (DMs are handled separately)
+    if e.is_private:
+        LOGS.info(f"[TAG_LOGGER] Skipping private message from sender {e.sender_id}")
+        return
+    
     # Comprehensive group type check including supergroups
     is_valid_group = (
         isinstance(e.chat, types.Chat) or
@@ -56,20 +68,38 @@ async def all_messages_catcher(e):
          getattr(e.chat, 'megagroup', False) and
          not getattr(e.chat, 'broadcast', False))
     )
+    
+    # Debug: Log chat type
+    LOGS.debug(f"[TAG_LOGGER] Chat type: {type(e.chat).__name__}, Megagroup: {getattr(e.chat, 'megagroup', 'N/A')}, Broadcast: {getattr(e.chat, 'broadcast', 'N/A')}")
+    
     if not is_valid_group:
-        LOGS.debug(f"Skipping non-group chat: {getattr(e.chat, 'title', 'DM')}")
-        return
+        LOGS.info(f"[TAG_LOGGER] Skipping non-group chat: {getattr(e.chat, 'title', 'Unknown')} (type: {type(e.chat).__name__})")
         return
     
-    # Deduplication check
+    # Enhanced deduplication check with timestamp
+    current_time = time.time()
     cache_key = f"{e.chat_id}_{e.id}"
-    if cache_key in PROCESSED_MSGS:
-        return
-    PROCESSED_MSGS.add(cache_key)
     
-    # Maintain cache size
+    # Check if message was already processed
+    if cache_key in PROCESSED_MSGS:
+        time_diff = current_time - PROCESSED_MSGS[cache_key]
+        if time_diff < 5:  # If processed within last 5 seconds, skip
+            LOGS.warning(f"[TAG_LOGGER] DUPLICATE DETECTED! Skipping {cache_key} (processed {time_diff:.2f}s ago)")
+            return
+        else:
+            LOGS.debug(f"[TAG_LOGGER] Re-processing old message {cache_key} (last processed {time_diff:.2f}s ago)")
+    
+    # Add to processed messages with timestamp
+    PROCESSED_MSGS[cache_key] = current_time
+    LOGS.debug(f"[TAG_LOGGER] Added {cache_key} to processed messages (total: {len(PROCESSED_MSGS)})")
+    
+    # Clean up old entries periodically
     if len(PROCESSED_MSGS) > 100:
-        PROCESSED_MSGS = set()
+        # Remove entries older than 5 minutes
+        cutoff_time = current_time - MSG_CLEANUP_INTERVAL
+        old_count = len(PROCESSED_MSGS)
+        PROCESSED_MSGS = {k: v for k, v in PROCESSED_MSGS.items() if v > cutoff_time}
+        LOGS.info(f"[TAG_LOGGER] Cache cleanup: {old_count} -> {len(PROCESSED_MSGS)} entries")
     
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
@@ -79,9 +109,18 @@ async def all_messages_catcher(e):
     NEEDTOLOG = udB.get_key("TAG_LOG")
     if e.chat_id == NEEDTOLOG:
         return
+    
+    # Log when processing a tag
+    sender_info = f"@{x.username}" if x and hasattr(x, 'username') and x.username else f"ID:{x.id if x else 'Unknown'}"
+    chat_info = f"{getattr(e.chat, 'title', 'Unknown')} ({e.chat_id})"
+    LOGS.info(f"[TAG_LOGGER] Processing tag from {chat_info}, message {e.id}, sender {sender_info}")
+    
     buttons = await parse_buttons(e)
     try:
+        LOGS.debug(f"[TAG_LOGGER] Attempting to send message to TAG_LOG channel {NEEDTOLOG}")
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
+        LOGS.info(f"[TAG_LOGGER] SUCCESS: Forwarded message {e.id} from chat {e.chat_id} -> TAG_LOG message {sent.id}")
+        
         if TAG_EDITS.get(e.chat_id):
             TAG_EDITS[e.chat_id].update({e.id: {"id": sent.id, "msg": e}})
         else:
@@ -146,10 +185,21 @@ if udB.get_key("TAG_LOG"):
         x = event.sender
         if isinstance(x, User) and (x.bot or x.verified):
             return
-        cache_key = f"{event.chat_id}_{event.id}"
-        if cache_key in PROCESSED_MSGS:
+        
+        # Skip if private message
+        if event.is_private:
             return
-        PROCESSED_MSGS.add(cache_key)
+            
+        # Use edit-specific cache key to track edits separately
+        cache_key = f"edit_{event.chat_id}_{event.id}_{event.edit_date.timestamp() if event.edit_date else 0}"
+        current_time = time.time()
+        
+        if cache_key in PROCESSED_MSGS:
+            time_diff = current_time - PROCESSED_MSGS[cache_key]
+            if time_diff < 2:  # Skip if processed within last 2 seconds
+                return
+        
+        PROCESSED_MSGS[cache_key] = current_time
         if event.chat_id not in TAG_EDITS:
             if event.sender_id == udB.get_key("TAG_LOG"):
                 return
