@@ -158,7 +158,7 @@ if udB.get_key("PMLOG"):
     )
     async def permitpm(event):
         user = await event.get_sender()
-        if user is None or getattr(user, "bot", False) or getattr(user, "is_self", False) or getattr(user, "verified", False) or Logm.contains(getattr(user, "id", None)):
+        if user.bot or user.is_self or user.verified or Logm.contains(user.id):
             return
         await event.forward_to(udB.get_key("PMLOGGROUP") or LOG_CHANNEL)
 
@@ -214,7 +214,7 @@ if udB.get_key("PMSETTING"):
     async def permitpm(event):
         inline_pm = Redis("INLINE_PM") or False
         user = event.sender
-        if user is None or not keym.contains(getattr(user, "id", None)) and event.text != UND:
+        if not keym.contains(user.id) and event.text != UND:
             if Redis("MOVE_ARCHIVE"):
                 try:
                     await ultroid_bot.edit_folder(user.id, folder=1)

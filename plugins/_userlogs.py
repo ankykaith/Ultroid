@@ -35,19 +35,9 @@ from . import (
     ultroid_bot,
 )
 
-from telethon.tl import types
-import time
-import sys
-
-# Track processed message IDs to prevent duplicates
-# Using a dict to store message info for debugging
-PROCESSED_MSGS = {}
 CACHE_SPAM = {}
 TAG_EDITS = {}
 
-# Force output to stderr for Docker logs
-sys.stderr.write("[TAG_LOGGER] ==> Module _userlogs.py loaded\n")
-sys.stderr.flush()
 
 @ultroid_bot.on(
     events.NewMessage(
@@ -56,52 +46,6 @@ sys.stderr.flush()
     ),
 )
 async def all_messages_catcher(e):
-    global PROCESSED_MSGS
-    
-    # Create unique key for this message
-    msg_key = f"{e.chat_id}_{e.id}"
-    
-    # Check if already processed (PREVENT DUPLICATES)
-    if msg_key in PROCESSED_MSGS:
-        # Already processed, log and exit
-        sys.stderr.write(f"[TAG_LOGGER] DUPLICATE! Already processed {msg_key}\n")
-        sys.stderr.flush()
-        return
-    
-    # Mark as processed IMMEDIATELY
-    PROCESSED_MSGS[msg_key] = time.time()
-    
-    # Log the new mention
-    sys.stderr.write(f"[TAG_LOGGER] NEW MENTION: msg={e.id} chat={e.chat_id} private={e.is_private}\n")
-    sys.stderr.flush()
-    
-    # Skip if not a group chat (DMs are handled separately)
-    if e.is_private:
-        sys.stderr.write(f"[TAG_LOGGER] Skipping private message\n")
-        sys.stderr.flush()
-        return
-    
-    # Comprehensive group type check including supergroups
-    is_valid_group = (
-        isinstance(e.chat, types.Chat) or
-        (isinstance(e.chat, types.Channel) and
-         getattr(e.chat, 'megagroup', False) and
-         not getattr(e.chat, 'broadcast', False))
-    )
-    
-    if not is_valid_group:
-        sys.stderr.write(f"[TAG_LOGGER] Skipping non-group chat\n")
-        sys.stderr.flush()
-        return
-    
-    # Clean up old entries if cache gets too large
-    if len(PROCESSED_MSGS) > 10000:
-        # Keep only recent entries (last hour)
-        cutoff = time.time() - 3600
-        PROCESSED_MSGS = {k: v for k, v in PROCESSED_MSGS.items() if v > cutoff}
-        sys.stderr.write(f"[TAG_LOGGER] Cache cleaned, {len(PROCESSED_MSGS)} entries remain\n")
-        sys.stderr.flush()
-    
     x = await e.get_sender()
     if isinstance(x, User) and (x.bot or x.verified):
         return
@@ -110,18 +54,9 @@ async def all_messages_catcher(e):
     NEEDTOLOG = udB.get_key("TAG_LOG")
     if e.chat_id == NEEDTOLOG:
         return
-    
-    # Log processing
-    sys.stderr.write(f"[TAG_LOGGER] Processing tag from chat {e.chat_id} msg {e.id}\n")
-    sys.stderr.flush()
-    
     buttons = await parse_buttons(e)
     try:
-        # Send to TAG_LOG channel
         sent = await asst.send_message(NEEDTOLOG, e.message, buttons=buttons)
-        sys.stderr.write(f"[TAG_LOGGER] SUCCESS! Forwarded msg {e.id} -> TAG_LOG msg {sent.id}\n")
-        sys.stderr.flush()
-        
         if TAG_EDITS.get(e.chat_id):
             TAG_EDITS[e.chat_id].update({e.id: {"id": sent.id, "msg": e}})
         else:
@@ -184,10 +119,6 @@ if udB.get_key("TAG_LOG"):
     async def upd_edits(event):
         x = event.sender
         if isinstance(x, User) and (x.bot or x.verified):
-            return
-        
-        # Skip if private message
-        if event.is_private:
             return
         if event.chat_id not in TAG_EDITS:
             if event.sender_id == udB.get_key("TAG_LOG"):
@@ -348,11 +279,11 @@ async def parse_buttons(event):
     buttons = [[Button.url(where_n, where_l)]]
     if isinstance(x, User) and x.username:
         try:
-            # Try to get entity, but don't fail if it doesn't work
-            entity = await asst.get_input_entity(x.username)
-            buttons.append([Button.mention(who_n, entity)])
-        except Exception:
-            # Fall back to URL button if entity resolution fails
+            buttons.append(
+                [Button.mention(who_n, await asst.get_input_entity(x.username))]
+            )
+        except Exception as er:
+            LOGS.exception(er)
             buttons.append([Button.url(who_n, f"t.me/{x.username}")])
     elif getattr(x, "username"):
         buttons.append([Button.url(who_n, f"t.me/{x.username}")])

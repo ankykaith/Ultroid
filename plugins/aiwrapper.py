@@ -34,16 +34,16 @@ import asyncio
 
 
 ENDPOINTS = {
-    "gpt": "https://api.a4f.co/v1/chat/completions",
+    "gpt": "https://api.openai.com/v1/chat/completions",
     "antr": "https://api.anthropic.com/v1/messages",
     "gemini": "https://generativelanguage.googleapis.com/v1beta/chat/completions",
     "deepseek": "https://api.deepseek.com/chat/completions"
 }
 
 DEFAULT_MODELS = {
-    "gpt": "provider-3/gpt-4",
+    "gpt": "gpt-4o-mini",
     "antr": "claude-3-opus-20240229",
-    "gemini": "gemini-2.5-flash",
+    "gemini": "gemini-1.5-flash",
     "deepseek": "deepseek-chat"
 }
 

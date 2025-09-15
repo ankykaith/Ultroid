@@ -79,8 +79,7 @@ async def lsnote(e):
 
 
 async def filter_func(e):
-    # Skip if sender is a bot or sender is None
-    if e.sender is None or getattr(e.sender, "bot", False):
+    if isinstance(e.sender, User) and e.sender.bot:
         return
     xx = (e.text).lower()
     chat = e.chat_id

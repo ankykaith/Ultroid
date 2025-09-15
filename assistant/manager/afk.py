@@ -26,8 +26,7 @@ AFK = {}
 @asst_cmd(pattern="afk", func=lambda x: not x.is_private)
 async def go_afk(event):
     sender = await event.get_sender()
-    # Skip non-users or bot accounts safely
-    if sender is None or getattr(sender, "bot", False):
+    if (not isinstance(sender, User)) or sender.bot:
         return
     try:
         reason = event.text.split(" ", maxsplit=1)[1]
@@ -60,8 +59,7 @@ async def make_change(event):
     if event.text.startswith("/afk"):
         return
     sender = await event.get_sender()
-    # Skip non-users or bot accounts safely
-    if sender is None or getattr(sender, "bot", False):
+    if (not isinstance(sender, User)) or sender.bot:
         return
     chat_ = AFK[event.chat_id]
     if event.sender_id in chat_.keys():
